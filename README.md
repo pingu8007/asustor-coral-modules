@@ -67,8 +67,20 @@ the defaults. "Run workflow" lets you override every input.
    ls -l /dev/apex_*
    ```
 
-The modules are not persistent. Call `load.sh` from a startup script to load
-them at boot.
+The modules are not persistent. To load them at boot:
+
+1. Copy `gasket.ko` and `apex.ko` to a directory on a data volume, so they
+   survive ADM updates.
+2. Install [`coral-tpu-init.sh`](scripts/coral-tpu-init.sh) as an ADM startup
+   script and point `MODULE_DIR` at that directory.
+
+After an ADM update the kernel may change. If the modules then fail to load
+at boot, rebuild them for the new ADM build; the failure itself is harmless.
+
+`/dev/apex_0` is created as `root:root` with mode `0660`. A container that
+runs as root can use it when the device is passed through (for example
+`--device /dev/apex_0`). A non-root container needs the device's group or
+mode changed first.
 
 If `insmod` fails, the reason is in `dmesg | tail -n 20`. BusyBox `insmod`
 itself only prints a generic error.

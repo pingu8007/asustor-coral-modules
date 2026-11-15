@@ -248,8 +248,8 @@ jobs:
           # The NAS kernel is built with CONFIG_DEBUG_INFO; drop debug sections
           # to keep the modules small. This does not touch vermagic or CRCs.
           "${CROSS_COMPILE}strip" --strip-debug "$OUT/gasket.ko" "$OUT/apex.ko"
-          cp "$GITHUB_WORKSPACE/scripts/load.sh" "$OUT/load.sh"
-          chmod +x "$OUT/load.sh"
+          cp "$GITHUB_WORKSPACE/scripts/load.sh" "$GITHUB_WORKSPACE/scripts/coral-tpu-init.sh" "$OUT/"
+          chmod +x "$OUT/load.sh" "$OUT/coral-tpu-init.sh"
           cp "$WORK/modversions.txt" "$WORK/config-drift.md" "$OUT/"
           {
             echo "adm_build=$ADM_BUILD"
