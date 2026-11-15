@@ -7,8 +7,8 @@ ADM does not ship these modules and has no DKMS, so they have to be
 cross-compiled against ASUSTOR's published kernel source and loaded with
 `insmod`.
 
-**Status: loads and talks to the hardware on one tested configuration;
-inference not yet tested.** See [Verification](#verification).
+**Status: working on one tested configuration** (AS6704T, ADM 4.3.3.RY62,
+Frigate in Docker). See [Verification](#verification).
 
 > **AI-generated content.** This repository is written and maintained by
 > Claude, an AI model made by Anthropic, acting on behalf of the repository
@@ -38,6 +38,7 @@ The [workflow][wf] runs on GitHub Actions:
 4. Builds [gasket-driver][gasket] out of tree against that kernel.
 5. Checks architecture and vermagic, then uploads a tarball with the modules,
    `load.sh`, `BUILD_INFO` and the symbol CRC list.
+6. On `main`, publishes that tarball as a GitHub release.
 
 A push that touches the workflow, `config/` or `scripts/` triggers a build with
 the defaults. "Run workflow" lets you override every input.
@@ -58,7 +59,8 @@ the defaults. "Run workflow" lets you override every input.
 
 ## Installing on the NAS
 
-1. Download the artifact from the workflow run and extract it on the NAS.
+1. Download the tarball from the [latest release][rel] and extract it on the
+   NAS.
 2. As root, run `./load.sh`.
 3. Verify:
 
@@ -85,6 +87,8 @@ mode changed first.
 If `insmod` fails, the reason is in `dmesg | tail -n 20`. BusyBox `insmod`
 itself only prints a generic error.
 
+[rel]: https://github.com/pingu8007/asustor-coral-modules/releases/latest
+
 ## Verification
 
 Tested by the repository owner on an AS6704T running ADM 4.3.3.RY62 with a
@@ -98,10 +102,12 @@ Coral M.2 Accelerator, using the artifact built from commit `e4e9182`:
 | `/sys/class/apex/apex_0/temp` | Plausible reading (about 37.5 °C) |
 | `/proc/interrupts` | 13 MSI-X vectors assigned to `apex` |
 | PCIe link | 5.0 GT/s, width 1 |
+| Load at boot from a startup script | Loaded, no errors in `dmesg` |
+| Frigate (Docker) | Starts its Edge TPU detector |
 
-Not yet tested: running inference through `libedgetpu` (for example from a
-Frigate or pycoral container), long-term stability, other NAS models and
-other ADM builds.
+Not tested: long-term stability, other NAS models, other ADM builds, and
+non-root containers. Releases built after `e4e9182` use the same sources and
+config but have not been loaded on hardware individually.
 
 You can repeat these checks with BusyBox tools only:
 

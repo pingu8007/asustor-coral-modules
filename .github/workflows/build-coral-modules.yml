@@ -9,7 +9,8 @@
 #   - cross toolchain               : ASUSTOR developer site
 #
 # A push that touches this file, config/ or scripts/ builds with the defaults below.
-# Use "Run workflow" to override them.
+# Use "Run workflow" to override them. A successful build on main is published
+# as a GitHub release.
 
 name: build-coral-modules
 
@@ -279,3 +280,57 @@ jobs:
           name: coral-modules-adm${{ env.ADM_BUILD }}-x86_64
           path: ${{ env.WORK }}/out/*.tar.gz
           if-no-files-found: error
+
+  # Publish the build as a GitHub release. Runs only for main, with write
+  # access limited to this job. Uses the run's own GITHUB_TOKEN.
+  release:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: coral-modules-adm${{ env.ADM_BUILD }}-x86_64
+          path: dist
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euxo pipefail
+          NAME="coral-modules-adm${ADM_BUILD}-x86_64"
+          TARBALL="dist/$NAME.tar.gz"
+          test -s "$TARBALL"
+          (cd dist && sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256")
+          TAG="adm${ADM_BUILD}-$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
+          {
+            echo "Coral Edge TPU PCIe modules (\`gasket.ko\`, \`apex.ko\`) for ASUSTOR ADM ${ADM_BUILD}, x86-64."
+            echo
+            echo "> **AI-generated.** This release was built and published automatically by CI."
+            echo "> The repository, including the build pipeline and these notes, is written and"
+            echo "> maintained by Claude, an AI model made by Anthropic."
+            echo
+            echo "**Hardware testing:** this specific build has not been loaded on a NAS."
+            echo "See the Verification section of the README for the configuration that was tested."
+            echo "Use at your own risk."
+            echo
+            echo "Install: extract the tarball on the NAS and run \`./load.sh\` as root."
+            echo
+            echo "### Build info"
+            echo '```'
+            tar -xzOf "$TARBALL" "$NAME/BUILD_INFO"
+            echo '```'
+          } > notes.md
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$TARBALL" "$TARBALL.sha256" --clobber
+          else
+            gh release create "$TAG" "$TARBALL" "$TARBALL.sha256" \
+              --target "$GITHUB_SHA" \
+              --title "ADM ${ADM_BUILD} ($(date -u +%Y-%m-%d))" \
+              --notes-file notes.md --latest
+          fi

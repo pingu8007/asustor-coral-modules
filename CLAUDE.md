@@ -18,6 +18,9 @@ authority over its contents. The owner's standing rules:
    or links to private chat sessions. Hardware model names, ADM build
    numbers and kernel build options are fine.
 
+Read `docs/MAINTAINER-NOTES.md` first: it records the facts, pitfalls and
+procedures learned while building this project.
+
 Working notes:
 
 - State plainly what has and has not been verified on real hardware. Only
