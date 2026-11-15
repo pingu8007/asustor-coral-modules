@@ -1,0 +1,273 @@
+# Build gasket.ko / apex.ko (Coral Edge TPU PCIe driver) for ASUSTOR ADM
+# x86-64 NAS models running the vendor "5.13.x" kernel.
+#
+# Inputs:
+#   - config/adm-<adm_build>.config : kernel config exported from the NAS
+#                                     (zcat /proc/config.gz)
+#   - kernel GPL source tarball     : ASUSTOR's SourceForge project (asgpl)
+#   - cross toolchain               : ASUSTOR developer site
+#
+# A push that touches this file, config/ or scripts/ builds with the defaults below.
+# Use "Run workflow" to override them.
+
+name: build-coral-modules
+
+on:
+  push:
+    paths:
+      - ".github/workflows/build-coral-modules.yml"
+      - "config/**"
+      - "scripts/**"
+  workflow_dispatch:
+    inputs:
+      adm_build:
+        description: "ADM build (selects config/adm-<adm_build>.config)"
+        default: "4.3.3.RY62"
+        required: true
+      gpl_folder_url:
+        description: "SourceForge folder holding the kernel GPL source"
+        default: "https://sourceforge.net/projects/asgpl/files/ADM4.3.3/ADM4.3.3_x86_64_kernel_5.13.x"
+        required: true
+      kernel_tarball:
+        description: "Kernel tarball file name in that folder"
+        default: "asustor_GPL_linux-5.13.x_20260611.tar.bz2"
+        required: true
+      kernel_tarball_sha1:
+        description: "Expected SHA-1 of the tarball (empty = skip check)"
+        default: "5e1ce5bc8824c70c6e663f797284aa624d5cedba"
+        required: false
+      vendor_config:
+        description: "Vendor .config file name in that folder (comparison only, empty = skip)"
+        default: "linux-5.13.x-x86_64.config"
+        required: false
+      vendor_config_sha1:
+        description: "Expected SHA-1 of the vendor .config (empty = skip check)"
+        default: "808b27cd4c7378096f68ea99dcc1a5ee06d08dbd"
+        required: false
+      toolchain_url:
+        description: "ASUSTOR x86-64 toolchain (ADM 4.1 and above)"
+        default: "https://downloadgb.asustor.com/developer/x86_64-asustor_x64_g3_2020.12.24-linux-gnu.tar.gz"
+        required: true
+      gasket_repo:
+        description: "gasket-driver repository"
+        default: "https://github.com/google/gasket-driver.git"
+        required: true
+      gasket_ref:
+        description: "gasket-driver branch / tag / commit"
+        default: "main"
+        required: true
+      expected_vermagic:
+        description: "vermagic of a stock module on the NAS (empty = skip check)"
+        default: "5.13.x SMP mod_unload modversions"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-coral-modules-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # `inputs` is empty on push events, so every value needs a fallback.
+  ADM_BUILD: ${{ inputs.adm_build || '4.3.3.RY62' }}
+  GPL_FOLDER_URL: ${{ inputs.gpl_folder_url || 'https://sourceforge.net/projects/asgpl/files/ADM4.3.3/ADM4.3.3_x86_64_kernel_5.13.x' }}
+  KERNEL_TARBALL: ${{ inputs.kernel_tarball || 'asustor_GPL_linux-5.13.x_20260611.tar.bz2' }}
+  KERNEL_TARBALL_SHA1: ${{ github.event_name == 'push' && '5e1ce5bc8824c70c6e663f797284aa624d5cedba' || inputs.kernel_tarball_sha1 }}
+  VENDOR_CONFIG: ${{ github.event_name == 'push' && 'linux-5.13.x-x86_64.config' || inputs.vendor_config }}
+  VENDOR_CONFIG_SHA1: ${{ github.event_name == 'push' && '808b27cd4c7378096f68ea99dcc1a5ee06d08dbd' || inputs.vendor_config_sha1 }}
+  TOOLCHAIN_URL: ${{ inputs.toolchain_url || 'https://downloadgb.asustor.com/developer/x86_64-asustor_x64_g3_2020.12.24-linux-gnu.tar.gz' }}
+  GASKET_REPO: ${{ inputs.gasket_repo || 'https://github.com/google/gasket-driver.git' }}
+  GASKET_REF: ${{ inputs.gasket_ref || 'main' }}
+  EXPECTED_VERMAGIC: ${{ github.event_name == 'push' && '5.13.x SMP mod_unload modversions' || inputs.expected_vermagic }}
+  WORK: ${{ github.workspace }}/work
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check NAS kernel config is present
+        run: |
+          set -euo pipefail
+          CFG="config/adm-${ADM_BUILD}.config"
+          if [ ! -f "$CFG" ]; then
+            echo "::error::$CFG not found. Export it on the NAS: zcat /proc/config.gz > adm-${ADM_BUILD}.config"
+            exit 1
+          fi
+          grep -q '^CONFIG_' "$CFG"
+          echo "NAS_CONFIG=$GITHUB_WORKSPACE/$CFG" >> "$GITHUB_ENV"
+
+      - name: Install host build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex libelf-dev libssl-dev \
+            kmod cpio rsync wget ca-certificates git bzip2 xz-utils file
+
+      - name: Restore download cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.WORK }}/dl
+          key: dl-${{ env.KERNEL_TARBALL }}-${{ env.KERNEL_TARBALL_SHA1 }}-${{ env.TOOLCHAIN_URL }}
+
+      - name: Download toolchain and kernel source
+        run: |
+          set -euxo pipefail
+          mkdir -p "$WORK/dl" && cd "$WORK/dl"
+          [ -f toolchain.tar.gz ] || wget -nv -O toolchain.tar.gz "$TOOLCHAIN_URL"
+          [ -f kernel.tar.bz2 ]   || wget -nv -O kernel.tar.bz2 "$GPL_FOLDER_URL/$KERNEL_TARBALL/download"
+          # Guard against SourceForge returning an HTML page instead of the file
+          file kernel.tar.bz2 | grep -qi bzip2
+          file toolchain.tar.gz | grep -qi gzip
+          if [ -n "$KERNEL_TARBALL_SHA1" ]; then
+            echo "$KERNEL_TARBALL_SHA1  kernel.tar.bz2" | sha1sum -c -
+          fi
+          if [ -n "$VENDOR_CONFIG" ]; then
+            [ -f vendor.config ] || wget -nv -O vendor.config "$GPL_FOLDER_URL/$VENDOR_CONFIG/download"
+            grep -q '^CONFIG_' vendor.config
+            if [ -n "$VENDOR_CONFIG_SHA1" ]; then
+              echo "$VENDOR_CONFIG_SHA1  vendor.config" | sha1sum -c -
+            fi
+          fi
+          sha256sum toolchain.tar.gz kernel.tar.bz2 | tee SHA256SUMS
+
+      - name: Extract toolchain and locate cross compiler
+        run: |
+          set -euxo pipefail
+          mkdir -p "$WORK/toolchain"
+          tar -xzf "$WORK/dl/toolchain.tar.gz" -C "$WORK/toolchain"
+          GCC=$(find "$WORK/toolchain" -name '*-linux-gnu-gcc' \( -type f -o -type l \) | head -n1)
+          test -n "$GCC"
+          "$GCC" --version
+          echo "CROSS_COMPILE=${GCC%gcc}" >> "$GITHUB_ENV"
+
+      - name: Extract kernel source and apply config
+        run: |
+          set -euxo pipefail
+          mkdir -p "$WORK/kernel"
+          tar -xjf "$WORK/dl/kernel.tar.bz2" -C "$WORK/kernel" --strip-components=1
+          cd "$WORK/kernel"
+          test -f Makefile
+          head -n 6 Makefile
+          # Config exported from the running NAS kernel (/proc/config.gz)
+          cp "$NAS_CONFIG" .config
+          make ARCH=x86_64 CROSS_COMPILE="$CROSS_COMPILE" olddefconfig
+          # Options that olddefconfig had to add/drop/change indicate that the
+          # published source differs from the kernel running on the NAS.
+          {
+            echo "### Config drift: NAS kernel vs. published source"
+            echo '```'
+            scripts/diffconfig "$NAS_CONFIG" .config || true
+            echo '```'
+          } | tee "$WORK/config-drift.md"
+          DRIFT=$(scripts/diffconfig "$NAS_CONFIG" .config | grep -c . || true)
+          echo "CONFIG_DRIFT=$DRIFT" >> "$GITHUB_ENV"
+          if [ "$DRIFT" -gt 0 ]; then
+            echo "::warning::$DRIFT config option(s) differ between the NAS kernel and the published source; symbol CRCs may not match."
+          fi
+          if [ -f "$WORK/dl/vendor.config" ]; then
+            {
+              echo "### Config diff: published vendor .config vs. NAS kernel"
+              echo '```'
+              scripts/diffconfig "$WORK/dl/vendor.config" "$NAS_CONFIG" || true
+              echo '```'
+            } | tee -a "$WORK/config-drift.md"
+          fi
+          cat "$WORK/config-drift.md" >> "$GITHUB_STEP_SUMMARY"
+          grep -E '^CONFIG_(MODVERSIONS|MODULE_SIG_FORCE|MODULE_SRCVERSION_ALL|PCI_MSI|DMA_SHARED_BUFFER)=' .config || true
+
+      - name: Build kernel tree
+        run: |
+          set -euxo pipefail
+          cd "$WORK/kernel"
+          if grep -q '^CONFIG_MODVERSIONS=y' .config; then
+            # Symbol CRCs (Module.symvers) only exist after a full build.
+            make ARCH=x86_64 CROSS_COMPILE="$CROSS_COMPILE" -j"$(nproc)"
+            test -s Module.symvers
+          else
+            make ARCH=x86_64 CROSS_COMPILE="$CROSS_COMPILE" -j"$(nproc)" modules_prepare
+          fi
+          make -s ARCH=x86_64 CROSS_COMPILE="$CROSS_COMPILE" kernelrelease | tee "$WORK/kernelrelease"
+
+      - name: Fetch gasket-driver
+        run: |
+          set -euxo pipefail
+          git clone "$GASKET_REPO" "$WORK/gasket"
+          git -C "$WORK/gasket" checkout "$GASKET_REF"
+          git -C "$WORK/gasket" rev-parse HEAD | tee "$WORK/gasket_commit"
+
+      - name: Build gasket.ko and apex.ko
+        run: |
+          set -euxo pipefail
+          make -C "$WORK/kernel" M="$WORK/gasket/src" \
+               ARCH=x86_64 CROSS_COMPILE="$CROSS_COMPILE" -j"$(nproc)" modules
+          ls -l "$WORK/gasket/src/"*.ko
+
+      - name: Verify modules
+        run: |
+          set -euxo pipefail
+          cd "$WORK/gasket/src"
+          for m in gasket.ko apex.ko; do
+            file "$m" | grep -q 'x86-64'
+            modinfo "$m"
+          done
+          VM=$(modinfo -F vermagic gasket.ko)
+          echo "vermagic: $VM"
+          if [ -n "$EXPECTED_VERMAGIC" ] && [ "$VM" != "$EXPECTED_VERMAGIC" ]; then
+            echo "::error::vermagic mismatch. built='$VM' expected='$EXPECTED_VERMAGIC'"
+            exit 1
+          fi
+          if grep -q '^CONFIG_MODULE_SIG_FORCE=y' "$WORK/kernel/.config"; then
+            echo "::warning::CONFIG_MODULE_SIG_FORCE=y - unsigned modules will be rejected by the NAS kernel."
+          fi
+          # Symbol CRCs the modules expect from the kernel; compare against
+          # dmesg if insmod reports "disagrees about version of symbol".
+          for m in gasket.ko apex.ko; do
+            modprobe --dump-modversions "$m" | sed "s|^|$m\t|"
+          done | tee "$WORK/modversions.txt"
+
+      - name: Package
+        run: |
+          set -euxo pipefail
+          NAME="coral-modules-adm${ADM_BUILD}-x86_64"
+          OUT="$WORK/out/$NAME"
+          mkdir -p "$OUT"
+          cp "$WORK/gasket/src/gasket.ko" "$WORK/gasket/src/apex.ko" "$OUT/"
+          # The NAS kernel is built with CONFIG_DEBUG_INFO; drop debug sections
+          # to keep the modules small. This does not touch vermagic or CRCs.
+          "${CROSS_COMPILE}strip" --strip-debug "$OUT/gasket.ko" "$OUT/apex.ko"
+          cp "$GITHUB_WORKSPACE/scripts/load.sh" "$OUT/load.sh"
+          chmod +x "$OUT/load.sh"
+          cp "$WORK/modversions.txt" "$WORK/config-drift.md" "$OUT/"
+          {
+            echo "adm_build=$ADM_BUILD"
+            echo "kernel_tarball=$KERNEL_TARBALL"
+            echo "kernel_config=config/adm-${ADM_BUILD}.config (sha256 $(sha256sum "$NAS_CONFIG" | cut -d' ' -f1))"
+            echo "config_drift_options=$CONFIG_DRIFT"
+            echo "kernelrelease=$(cat "$WORK/kernelrelease")"
+            echo "vermagic=$(modinfo -F vermagic "$OUT/gasket.ko")"
+            echo "gasket_repo=$GASKET_REPO"
+            echo "gasket_commit=$(cat "$WORK/gasket_commit")"
+            echo "repo_commit=$GITHUB_SHA"
+            echo "--- sha256 of downloads ---"
+            cat "$WORK/dl/SHA256SUMS"
+          } > "$OUT/BUILD_INFO"
+          (cd "$OUT" && sha256sum gasket.ko apex.ko > SHA256SUMS)
+          tar -C "$WORK/out" -czf "$OUT.tar.gz" "$NAME"
+          {
+            echo "### Build info"
+            echo '```'
+            cat "$OUT/BUILD_INFO"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coral-modules-adm${{ env.ADM_BUILD }}-x86_64
+          path: ${{ env.WORK }}/out/*.tar.gz
+          if-no-files-found: error

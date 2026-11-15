@@ -1,1 +1,96 @@
 # asustor-coral-modules
+
+Builds the Coral Edge TPU PCIe/M.2 kernel modules (`gasket.ko`, `apex.ko`) for
+ASUSTOR NAS models running ADM on the vendor x86-64 `5.13.x` kernel.
+
+ADM does not ship these modules and has no DKMS, so they have to be
+cross-compiled against ASUSTOR's published kernel source and loaded with
+`insmod`.
+
+**Status: experimental.** The build has not yet been confirmed to load on a
+NAS. See [Known risk](#known-risk).
+
+## Target
+
+| Item | Value |
+|---|---|
+| ADM build | 4.3.3.RY62 |
+| Kernel release | `5.13.x` (literal string) |
+| vermagic | `5.13.x SMP mod_unload modversions` |
+| Architecture | x86-64 |
+| Compiler | `x86_64-asustor_x64_g3_2020.12.24-linux-gnu-gcc` 7.4.0 |
+
+## How the build works
+
+The [workflow][wf] runs on GitHub Actions:
+
+1. Downloads ASUSTOR's cross toolchain and kernel GPL source tarball.
+2. Applies the kernel config exported from the NAS (`config/`), then reports
+   any option that `olddefconfig` had to change ("config drift").
+3. Builds the full kernel tree. `CONFIG_MODVERSIONS=y` requires
+   `Module.symvers`, which only exists after a full build.
+4. Builds [gasket-driver][gasket] out of tree against that kernel.
+5. Checks architecture and vermagic, then uploads a tarball with the modules,
+   `load.sh`, `BUILD_INFO` and the symbol CRC list.
+
+A push that touches the workflow, `config/` or `scripts/` triggers a build with
+the defaults. "Run workflow" lets you override every input.
+
+[wf]: .github/workflows/build-coral-modules.yml
+[gasket]: https://github.com/google/gasket-driver
+
+## Sources
+
+| Resource | Location |
+|---|---|
+| Kernel GPL source | [SourceForge `asgpl`, ADM4.3.3 x86-64][gpl] |
+| Cross toolchain | [ASUSTOR Developer Corner][tools] |
+| Driver | [google/gasket-driver][gasket] (archived upstream) |
+
+[gpl]: https://sourceforge.net/projects/asgpl/files/ADM4.3.3/ADM4.3.3_x86_64_kernel_5.13.x/
+[tools]: https://developer.asustor.com/tools
+
+## Installing on the NAS
+
+1. Download the artifact from the workflow run and extract it on the NAS.
+2. As root, run `./load.sh`.
+3. Verify:
+
+   ```sh
+   lsmod | grep -E '^(gasket|apex) '
+   ls -l /dev/apex_*
+   ```
+
+The modules are not persistent. Call `load.sh` from a startup script to load
+them at boot.
+
+If `insmod` fails, the reason is in `dmesg | tail -n 20`. BusyBox `insmod`
+itself only prints a generic error.
+
+## Known risk
+
+The NAS kernel checks the CRC of every symbol a module imports. The published
+kernel source (dated 2026-06-11) is older than the kernel shipped in
+4.3.3.RY62 (built 2026-08-11), and ADM received kernel security patches in
+between. If any of those patches changed a symbol that `gasket` or `apex`
+imports, `insmod` fails with `disagrees about version of symbol <name>`.
+
+A CRC mismatch is rejected before any module code runs, so trying to load the
+modules is safe. `modversions.txt` in the artifact lists the CRCs the modules
+expect.
+
+## Adding another ADM build
+
+1. On the NAS: `zcat /proc/config.gz > adm-<build>.config`
+2. Commit the file to `config/`.
+3. Run the workflow with `adm_build` set to `<build>` and, if ASUSTOR has
+   published a newer tarball, the matching `kernel_tarball` and SHA-1.
+
+The kernel config contains build options only. Do not commit anything else
+from the NAS (hostnames, serial numbers, network settings).
+
+## License
+
+The build scripts in this repository are provided as-is. The kernel and
+gasket-driver are GPL-2.0; binaries built by the workflow are derived from
+them and are distributed under the same terms.
