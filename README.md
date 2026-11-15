@@ -21,7 +21,7 @@ NAS. See [Known risk](#known-risk).
 | Item | Value |
 |---|---|
 | ADM build | 4.3.3.RY62 |
-| Kernel release | `5.13.x` (literal string) |
+| Kernel release | `5.13.x` (literal string; source is 5.13.19) |
 | vermagic | `5.13.x SMP mod_unload modversions` |
 | Architecture | x86-64 |
 | Compiler | `x86_64-asustor_x64_g3_2020.12.24-linux-gnu-gcc` 7.4.0 |

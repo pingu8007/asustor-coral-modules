@@ -5,6 +5,7 @@
 #   - config/adm-<adm_build>.config : kernel config exported from the NAS
 #                                     (zcat /proc/config.gz)
 #   - kernel GPL source tarball     : ASUSTOR's SourceForge project (asgpl)
+#                                     (named .tar.bz2 but XZ-compressed)
 #   - cross toolchain               : ASUSTOR developer site
 #
 # A push that touches this file, config/ or scripts/ builds with the defaults below.
@@ -220,8 +221,10 @@ jobs:
             file "$m" | grep -q 'x86-64'
             modinfo "$m"
           done
-          VM=$(modinfo -F vermagic gasket.ko)
-          echo "vermagic: $VM"
+          # The kernel's vermagic string ends with a space; compare trimmed.
+          VM=$(modinfo -F vermagic gasket.ko | sed 's/[[:space:]]*$//')
+          EXPECTED_VERMAGIC=$(printf '%s' "$EXPECTED_VERMAGIC" | sed 's/[[:space:]]*$//')
+          echo "vermagic: '$VM'"
           if [ -n "$EXPECTED_VERMAGIC" ] && [ "$VM" != "$EXPECTED_VERMAGIC" ]; then
             echo "::error::vermagic mismatch. built='$VM' expected='$EXPECTED_VERMAGIC'"
             exit 1
@@ -254,7 +257,7 @@ jobs:
             echo "kernel_config=config/adm-${ADM_BUILD}.config (sha256 $(sha256sum "$NAS_CONFIG" | cut -d' ' -f1))"
             echo "config_drift_options=$CONFIG_DRIFT"
             echo "kernelrelease=$(cat "$WORK/kernelrelease")"
-            echo "vermagic=$(modinfo -F vermagic "$OUT/gasket.ko")"
+            echo "vermagic=$(modinfo -F vermagic "$OUT/gasket.ko" | sed 's/[[:space:]]*$//')"
             echo "gasket_repo=$GASKET_REPO"
             echo "gasket_commit=$(cat "$WORK/gasket_commit")"
             echo "repo_commit=$GITHUB_SHA"
