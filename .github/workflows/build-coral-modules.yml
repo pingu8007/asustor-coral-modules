@@ -120,9 +120,14 @@ jobs:
           mkdir -p "$WORK/dl" && cd "$WORK/dl"
           [ -f toolchain.tar.gz ] || wget -nv -O toolchain.tar.gz "$TOOLCHAIN_URL"
           [ -f kernel.tar.bz2 ]   || wget -nv -O kernel.tar.bz2 "$GPL_FOLDER_URL/$KERNEL_TARBALL/download"
-          # Guard against SourceForge returning an HTML page instead of the file
-          file kernel.tar.bz2 | grep -qi bzip2
-          file toolchain.tar.gz | grep -qi gzip
+          # Show what was actually downloaded; SourceForge can return an HTML
+          # page instead of the file, and archive names do not always match
+          # their real compression format.
+          file toolchain.tar.gz kernel.tar.bz2
+          if file -b --mime-type kernel.tar.bz2 toolchain.tar.gz | grep -E 'text/|html'; then
+            echo "::error::a download is not an archive"
+            exit 1
+          fi
           if [ -n "$KERNEL_TARBALL_SHA1" ]; then
             echo "$KERNEL_TARBALL_SHA1  kernel.tar.bz2" | sha1sum -c -
           fi
@@ -139,7 +144,7 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p "$WORK/toolchain"
-          tar -xzf "$WORK/dl/toolchain.tar.gz" -C "$WORK/toolchain"
+          tar -xf "$WORK/dl/toolchain.tar.gz" -C "$WORK/toolchain"
           GCC=$(find "$WORK/toolchain" -name '*-linux-gnu-gcc' \( -type f -o -type l \) | head -n1)
           test -n "$GCC"
           "$GCC" --version
@@ -149,7 +154,7 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p "$WORK/kernel"
-          tar -xjf "$WORK/dl/kernel.tar.bz2" -C "$WORK/kernel" --strip-components=1
+          tar -xf "$WORK/dl/kernel.tar.bz2" -C "$WORK/kernel" --strip-components=1
           cd "$WORK/kernel"
           test -f Makefile
           head -n 6 Makefile
