@@ -7,8 +7,8 @@ ADM does not ship these modules and has no DKMS, so they have to be
 cross-compiled against ASUSTOR's published kernel source and loaded with
 `insmod`.
 
-**Status: experimental.** The build has not yet been confirmed to load on a
-NAS. See [Known risk](#known-risk).
+**Status: loads and talks to the hardware on one tested configuration;
+inference not yet tested.** See [Verification](#verification).
 
 > **AI-generated content.** This repository is written and maintained by
 > Claude, an AI model made by Anthropic, acting on behalf of the repository
@@ -73,6 +73,33 @@ them at boot.
 If `insmod` fails, the reason is in `dmesg | tail -n 20`. BusyBox `insmod`
 itself only prints a generic error.
 
+## Verification
+
+Tested by the repository owner on an AS6704T running ADM 4.3.3.RY62 with a
+Coral M.2 Accelerator, using the artifact built from commit `e4e9182`:
+
+| Check | Result |
+|---|---|
+| `insmod gasket.ko`, `insmod apex.ko` | Loaded, no symbol CRC errors |
+| `/dev/apex_0` | Present |
+| `/sys/class/apex/apex_0/status` | `ALIVE` |
+| `/sys/class/apex/apex_0/temp` | Plausible reading (about 37.5 °C) |
+| `/proc/interrupts` | 13 MSI-X vectors assigned to `apex` |
+| PCIe link | 5.0 GT/s, width 1 |
+
+Not yet tested: running inference through `libedgetpu` (for example from a
+Frigate or pycoral container), long-term stability, other NAS models and
+other ADM builds.
+
+You can repeat these checks with BusyBox tools only:
+
+```sh
+cat /sys/class/apex/apex_0/status
+cat /sys/class/apex/apex_0/temp
+grep -i apex /proc/interrupts
+dmesg | grep -i -E 'apex|gasket'
+```
+
 ## Known risk
 
 The NAS kernel checks the CRC of every symbol a module imports. The published
@@ -80,6 +107,9 @@ kernel source (dated 2026-06-11) is older than the kernel shipped in
 4.3.3.RY62 (built 2026-08-11), and ADM received kernel security patches in
 between. If any of those patches changed a symbol that `gasket` or `apex`
 imports, `insmod` fails with `disagrees about version of symbol <name>`.
+
+On the tested configuration above the CRCs matched. That result holds only
+for that ADM build: a later ADM update can change the kernel and break it.
 
 A CRC mismatch is rejected before any module code runs, so trying to load the
 modules is safe. `modversions.txt` in the artifact lists the CRCs the modules
@@ -109,8 +139,8 @@ from the NAS (hostnames, serial numbers, network settings).
   toolchain and gasket-driver are downloaded at build time and are not part
   of this repository.
 - **Verification state**: what has and has not been tested on real hardware
-  is stated under [Status](#asustor-coral-modules) and
-  [Known risk](#known-risk). Nothing is claimed to work beyond that.
+  is stated under [Verification](#verification). Hardware tests are run by
+  the owner, not by the AI. Nothing is claimed to work beyond that.
 
 ## Project rules
 
